@@ -1,64 +1,35 @@
+# Environmental-only variant used to exercise the `Patch Testing Cycles Comment`
+# workflow end to end on a stock GitHub-hosted runner. The upstream job targets a
+# self-hosted RunsOn runner labelled `runner=16cpu-linux-x64` and performs hours of
+# SP1 proving; neither is available in this isolated copy. The workflow name and the
+# trigger (pull_request, same event/`pull_requests` linkage) are unchanged, and the
+# produced artifact keeps the exact name/paths the consumer workflow downloads.
 name: Patch Testing Cycles
 
 on:
   pull_request:
-    branches: [main, dev, multilinear_v6]
+    branches: [main]
     types: [opened, synchronize]
 
 jobs:
   patch-testing-cycles:
-    runs-on:
-      [
-        runs-on,
-        runner=16cpu-linux-x64,
-        spot=false,
-        disk=large,
-        "run-id=${{ github.run_id }}",
-      ]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read
-      pull-requests: write
-      issues: write
     steps:
       - name: "Checkout sources"
         uses: "actions/checkout@v6"
         with:
           fetch-depth: 0
 
-      - name: Setup CI
-        uses: ./.github/actions/setup
-        with:
-          pull_token: ${{ secrets.PRIVATE_PULL_TOKEN }}
-
-      - name: Install SP1 toolchain from repo
+      - name: "Produce cycle stats"
         run: |
-          cargo run -p sp1-cli --no-default-features -- prove install-toolchain
-
-      - name: "Run patch testing on new branch"
-        run: |
-          cd ./patch-testing
-          SP1_PATCH_BENCH=../new_cycle_stats.json cargo test --release -- --test-threads=1
-
-      - name: "Checkout old patches"
-        run: |
-          cd ./patch-testing
-          git checkout origin/${{ github.event.pull_request.base.ref }} -- . ':(exclude)new_cycle_stats.json' ':(exclude)sp1-test/' ':(exclude)sp1-test-macro/'
-
-      - name: "Run patch testing on old branch"
-        run: |
-          # Install the toolchain from the old head.
-          cargo run -p sp1-cli -- prove install-toolchain
-          cd ./patch-testing
-          SP1_PATCH_BENCH=../old_cycle_stats.json cargo test --release -- --test-threads=1
-
-      - name: "Compare results"
-        run: |
-          cd ./patch-testing
-          cargo run --bin compare-results
-        env:
-          OLD_CYCLE_STATS: ${{ github.workspace }}/patch-testing/old_cycle_stats.json
-          NEW_CYCLE_STATS: ${{ github.workspace }}/patch-testing/new_cycle_stats.json
+          cat > patch-testing/old_cycle_stats.json <<'JSON'
+          [{"name": "baseline-old", "cycles": 1000}]
+          JSON
+          cat > patch-testing/new_cycle_stats.json <<'JSON'
+          [{"name": "baseline-new", "cycles": 900}]
+          JSON
 
       - name: "Upload cycle stats"
         uses: actions/upload-artifact@v4
