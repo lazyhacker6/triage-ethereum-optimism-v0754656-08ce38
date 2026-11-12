@@ -1,2 +1,6 @@
 [env]
-TMPDIR = { value = "target", relative = true, force = true }
+# Environmental: the original value was `{ value = "target", relative = true }`,
+# which resolves to the ~110-character checkout path. sccache derives its Unix
+# domain socket from TMPDIR and cannot bind paths >= SUN_LEN (108 bytes), so every
+# cargo invocation wrapped by sccache aborts. /tmp is short and always present.
+TMPDIR = "/tmp"
